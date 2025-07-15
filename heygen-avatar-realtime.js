@@ -13,7 +13,7 @@
         userId: 'guest_' + Math.random().toString(36).substr(2, 9), // Unique user ID
         sessionId: crypto.randomUUID()
     };
-
+    
     // Load styles
     const styles = document.createElement('style');
     styles.textContent = `
