@@ -8,7 +8,7 @@
         heyGenApiKey: 'MmM0MTZjMjM1OTM1NDY5ODkzYzRiZWIwNjI1ODU5ZWEtMTc1MTg3MzIxMw==', // Replace with your HeyGen API key
         avatarId: 'June_HR_public', // Replace with your HeyGen avatar ID from labs.heygen.com
         streamingApiUrl: 'wss://api.heygen.com/v2/streaming', // HeyGen Streaming API endpoint
-        n8nWebhookUrl: 'https://gigwave24.app.n8n.cloud/webhook/c6eb7543-544e-4f61-83db-8ee944e3c457/chat', // For initial knowledge base setup
+        n8nWebhookUrl: 'https://gigwave24.app.n8n.cloud/webhook/heygen', // For initial knowledge base setup
         defaultKnowledgeBase: 'Hello! I can answer your questions in real-time. Ask me anything!', // Default prompt
         userId: 'guest_' + Math.random().toString(36).substr(2, 9), // Unique user ID
         sessionId: crypto.randomUUID()
