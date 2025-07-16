@@ -14,7 +14,7 @@
         sessionId: crypto.randomUUID()
     };
 
-     // Load styles
+    // Load styles
     const styles = document.createElement('style');
     styles.textContent = `
         .heygen-avatar-container {
@@ -30,27 +30,11 @@
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
             background: #f5f5f5;
         }
-        .heygen-chat-container {
+        .heygen-voice-container {
             margin-top: 20px;
             padding: 0 10px;
         }
-        .heygen-chat-input {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 14px;
-            resize: none;
-            min-height: 50px;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
-        }
-        .heygen-chat-input:focus {
-            outline: none;
-            border-color: #10b981;
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
-        }
-        .heygen-chat-button {
-            margin-top: 10px;
+        .heygen-voice-button {
             padding: 12px 24px;
             background: #10b981;
             color: white;
@@ -60,10 +44,10 @@
             font-size: 14px;
             font-weight: 500;
         }
-        .heygen-chat-button:hover {
+        .heygen-voice-button:hover {
             background: #059669;
         }
-        .heygen-chat-response {
+        .heygen-voice-response {
             margin-top: 15px;
             padding: 12px;
             background: #f9fafb;
@@ -124,15 +108,15 @@
     container.className = 'heygen-avatar-container';
     container.innerHTML = `
         <video id="heygenAvatarVideo" class="heygen-avatar-video" autoplay controls></video>
-        <div class="heygen-chat-container">
-            <textarea class="heygen-chat-input" placeholder="Type your question..."></textarea>
-            <button class="heygen-chat-button">Send</button>
+        <div class="heygen-voice-container">
+            <button id="startVoiceBtn" class="heygen-voice-button">Start Voice</button>
+            <button id="stopVoiceBtn" class="heygen-voice-button" style="display: none;">Stop Voice</button>
             <div class="heygen-loader">
                 <div class="heygen-loader-dot"></div>
                 <div class="heygen-loader-dot"></div>
                 <div class="heygen-loader-dot"></div>
             </div>
-            <div class="heygen-chat-response"></div>
+            <div class="heygen-voice-response"></div>
             <div class="heygen-timestamp"></div>
         </div>
     `;
@@ -140,10 +124,10 @@
 
     // DOM elements
     const videoElement = container.querySelector('#heygenAvatarVideo');
-    const chatInput = container.querySelector('.heygen-chat-input');
-    const sendButton = container.querySelector('.heygen-chat-button');
+    const startVoiceBtn = container.querySelector('#startVoiceBtn');
+    const stopVoiceBtn = container.querySelector('#stopVoiceBtn');
     const loader = container.querySelector('.heygen-loader');
-    const responseDiv = container.querySelector('.heygen-chat-response');
+    const responseDiv = container.querySelector('.heygen-voice-response');
     const timestampDiv = container.querySelector('.heygen-timestamp');
 
     // Update timestamp with current date and time
@@ -154,7 +138,7 @@
         const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
         const day = now.toLocaleDateString('en-US', { weekday: 'long' });
         const date = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        timestampDiv.textContent = `${hours}:${minutes} ${ampm} ${day}, ${date} +08`; // 04:53 PM Wednesday, Jul 16, 2025 +08
+        timestampDiv.textContent = `${hours}:${minutes} ${ampm} ${day}, ${date} +08`; // 05:03 PM Wednesday, Jul 16, 2025 +08
     }
     updateTimestamp();
     setInterval(updateTimestamp, 60000); // Update every minute
@@ -169,11 +153,14 @@
         sourceBuffer.mode = 'sequence';
     });
 
-    // Handle WebSocket for HeyGen Streaming API
-    let ws;
+    // Audio context for input and output
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: config.sampleRate });
+    let mediaStreamSource, scriptProcessor, ws;
+
+    // Initialize WebSocket for HeyGen Streaming API
     function initializeWebSocket() {
         ws = new WebSocket(config.streamingApiUrl);
-        ws.binaryType = 'arraybuffer'; // Handle binary video frames
+        ws.binaryType = 'arraybuffer'; // Handle binary audio and video frames
         ws.onopen = () => {
             console.log('WebSocket connected');
             const initPayload = {
@@ -183,27 +170,36 @@
                 user_id: config.userId,
                 knowledge_base: config.defaultKnowledgeBase,
                 mode: 'streaming',
-                webhook_url: config.n8nWebhookUrl // Optional: Pass webhook URL to HeyGen if supported
+                sample_rate: config.sampleRate
             };
             ws.send(JSON.stringify(initPayload));
         };
         ws.onmessage = (event) => {
-            const data = event.data instanceof ArrayBuffer ? JSON.parse(new TextDecoder().decode(event.data)) : JSON.parse(event.data);
-            if (data.type === 'video_frame') {
-                if (!sourceBuffer || mediaSource.readyState !== 'open') return;
-                try {
-                    const uint8Array = new Uint8Array(data.video_frame); // Assume data.video_frame is the raw frame
-                    if (sourceBuffer.updating) {
-                        sourceBuffer.addEventListener('updateend', () => {
-                            sourceBuffer.appendBuffer(uint8Array);
-                        });
-                    } else {
-                        sourceBuffer.appendBuffer(uint8Array);
+            const data = event.data instanceof ArrayBuffer ? new Uint8Array(event.data) : JSON.parse(event.data);
+            if (data instanceof Uint8Array && data.length > 0) {
+                // Assume binary data is video or audio frame
+                if (data[0] === 0x00) { // Hypothetical video frame identifier
+                    if (!sourceBuffer || mediaSource.readyState !== 'open') return;
+                    try {
+                        if (sourceBuffer.updating) {
+                            sourceBuffer.addEventListener('updateend', () => {
+                                sourceBuffer.appendBuffer(data);
+                            });
+                        } else {
+                            sourceBuffer.appendBuffer(data);
+                        }
+                    } catch (e) {
+                        console.error('Error appending video frame:', e);
                     }
-                } catch (e) {
-                    console.error('Error appending video frame:', e);
+                } else if (data[0] === 0x01) { // Hypothetical audio frame identifier
+                    const audioBuffer = audioContext.createBuffer(1, data.length / 2, config.sampleRate); // Assuming 16-bit PCM
+                    audioBuffer.copyToChannel(new Int16Array(data.buffer), 0);
+                    const source = audioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(audioContext.destination);
+                    source.start();
                 }
-            } else if (data.type === 'text_response') {
+            } else if (typeof data === 'object' && data.type === 'text_response') {
                 responseDiv.textContent = data.text;
                 loader.classList.remove('active');
                 updateTimestamp();
@@ -216,46 +212,45 @@
         };
     }
 
-    // Send message to HeyGen Streaming API and n8n webhook
-    async function sendRealTimeMessage(text) {
-        if (ws && ws.readyState === WebSocket.OPEN) {
+    // Start voice recording
+    async function startVoiceRecording() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaStreamSource = audioContext.createMediaStreamSource(stream);
+            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+            mediaStreamSource.connect(scriptProcessor);
+            scriptProcessor.connect(audioContext.destination);
+
+            scriptProcessor.onaudioprocess = (e) => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const input = e.inputBuffer.getChannelData(0);
+                    const rawData = new Int16Array(input.length);
+                    for (let i = 0; i < input.length; i++) {
+                        rawData[i] = input[i] * 32767; // Convert to 16-bit
+                    }
+                    ws.send(rawData.buffer);
+                }
+            };
+
+            startVoiceBtn.style.display = 'none';
+            stopVoiceBtn.style.display = 'inline-block';
             loader.classList.add('active');
-            responseDiv.textContent = '';
-
-            // Send to HeyGen Streaming API
-            const messagePayload = {
-                type: 'user_message',
-                session_id: config.sessionId,
-                user_id: config.userId,
-                text: text
-            };
-            ws.send(JSON.stringify(messagePayload));
-
-            // Send to n8n webhook
-            const webhookPayload = {
-                action: 'processMessage',
-                sessionId: config.sessionId,
-                route: 'heygen-knowledge',
-                chatInput: text,
-                metadata: { userId: config.userId, avatarId: config.avatarId }
-            };
-            try {
-                const response = await fetch(config.n8nWebhookUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(webhookPayload)
-                });
-                if (!response.ok) throw new Error('n8n webhook failed');
-                const data = await response.json();
-                console.log('Webhook response:', data); // Debug: Check if text is received
-            } catch (error) {
-                console.error('Webhook error:', error);
-                responseDiv.textContent += '\nWebhook error: Could not process message.';
-            }
-        } else {
-            console.error('WebSocket not connected');
-            responseDiv.textContent = 'Error: Connection lost. Reconnecting...';
+        } catch (error) {
+            console.error('Error accessing microphone:', error);
+            responseDiv.textContent = 'Error: Microphone access denied.';
             loader.classList.remove('active');
+        }
+    }
+
+    // Stop voice recording
+    function stopVoiceRecording() {
+        if (mediaStreamSource) mediaStreamSource.disconnect();
+        if (scriptProcessor) scriptProcessor.disconnect();
+        startVoiceBtn.style.display = 'inline-block';
+        stopVoiceBtn.style.display = 'none';
+        loader.classList.remove('active');
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'end_speech', session_id: config.sessionId }));
         }
     }
 
@@ -282,24 +277,8 @@
     }
 
     // Event listeners
-    sendButton.addEventListener('click', () => {
-        const text = chatInput.value.trim();
-        if (text) {
-            sendRealTimeMessage(text);
-            chatInput.value = '';
-        }
-    });
-
-    chatInput.addEventListener('keypress', (event) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            const text = chatInput.value.trim();
-            if (text) {
-                sendRealTimeMessage(text);
-                chatInput.value = '';
-            }
-        }
-    });
+    startVoiceBtn.addEventListener('click', startVoiceRecording);
+    stopVoiceBtn.addEventListener('click', stopVoiceRecording);
 
     // Initialize avatar and knowledge base
     initializeKnowledgeBase();
