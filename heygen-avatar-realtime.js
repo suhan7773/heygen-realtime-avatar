@@ -13,8 +13,8 @@
         userId: 'guest_' + Math.random().toString(36).substr(2, 9), // Unique user ID
         sessionId: crypto.randomUUID()
     };
-    
-    // Load styles
+
+     // Load styles
     const styles = document.createElement('style');
     styles.textContent = `
         .heygen-avatar-container {
@@ -123,7 +123,7 @@
     const container = document.createElement('div');
     container.className = 'heygen-avatar-container';
     container.innerHTML = `
-        <video id="heygenAvatarVideo" class="heygen-avatar-video" autoplay muted playsinline></video>
+        <video id="heygenAvatarVideo" class="heygen-avatar-video" autoplay controls></video>
         <div class="heygen-chat-container">
             <textarea class="heygen-chat-input" placeholder="Type your question..."></textarea>
             <button class="heygen-chat-button">Send</button>
@@ -154,15 +154,26 @@
         const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
         const day = now.toLocaleDateString('en-US', { weekday: 'long' });
         const date = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        timestampDiv.textContent = `${hours}:${minutes} ${ampm} ${day}, ${date} +08`; // 04:41 PM Tuesday, Jul 15, 2025 +08
+        timestampDiv.textContent = `${hours}:${minutes} ${ampm} ${day}, ${date} +08`; // 04:53 PM Wednesday, Jul 16, 2025 +08
     }
     updateTimestamp();
     setInterval(updateTimestamp, 60000); // Update every minute
 
-    // Initialize WebSocket for HeyGen Streaming API
+    // Initialize MediaSource for video
+    const mediaSource = new MediaSource();
+    videoElement.src = URL.createObjectURL(mediaSource);
+    let sourceBuffer;
+
+    mediaSource.addEventListener('sourceopen', () => {
+        sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E"'); // Assuming H.264, adjust codec as needed
+        sourceBuffer.mode = 'sequence';
+    });
+
+    // Handle WebSocket for HeyGen Streaming API
     let ws;
     function initializeWebSocket() {
         ws = new WebSocket(config.streamingApiUrl);
+        ws.binaryType = 'arraybuffer'; // Handle binary video frames
         ws.onopen = () => {
             console.log('WebSocket connected');
             const initPayload = {
@@ -171,21 +182,31 @@
                 session_id: config.sessionId,
                 user_id: config.userId,
                 knowledge_base: config.defaultKnowledgeBase,
-                mode: 'streaming' // Request real-time streaming mode
+                mode: 'streaming',
+                webhook_url: config.n8nWebhookUrl // Optional: Pass webhook URL to HeyGen if supported
             };
             ws.send(JSON.stringify(initPayload));
         };
         ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+            const data = event.data instanceof ArrayBuffer ? JSON.parse(new TextDecoder().decode(event.data)) : JSON.parse(event.data);
             if (data.type === 'video_frame') {
-                videoElement.srcObject = data.video_stream;
-            } else if (data.type === 'audio_frame') {
-                // Handle audio if supported (e.g., play via AudioContext)
-                console.log('Audio frame received:', data.audio_stream);
+                if (!sourceBuffer || mediaSource.readyState !== 'open') return;
+                try {
+                    const uint8Array = new Uint8Array(data.video_frame); // Assume data.video_frame is the raw frame
+                    if (sourceBuffer.updating) {
+                        sourceBuffer.addEventListener('updateend', () => {
+                            sourceBuffer.appendBuffer(uint8Array);
+                        });
+                    } else {
+                        sourceBuffer.appendBuffer(uint8Array);
+                    }
+                } catch (e) {
+                    console.error('Error appending video frame:', e);
+                }
             } else if (data.type === 'text_response') {
                 responseDiv.textContent = data.text;
                 loader.classList.remove('active');
-                updateTimestamp(); // Update timestamp on new response
+                updateTimestamp();
             }
         };
         ws.onerror = (error) => console.error('WebSocket error:', error);
@@ -195,11 +216,13 @@
         };
     }
 
-    // Send message to HeyGen Streaming API in real-time
-    function sendRealTimeMessage(text) {
+    // Send message to HeyGen Streaming API and n8n webhook
+    async function sendRealTimeMessage(text) {
         if (ws && ws.readyState === WebSocket.OPEN) {
             loader.classList.add('active');
             responseDiv.textContent = '';
+
+            // Send to HeyGen Streaming API
             const messagePayload = {
                 type: 'user_message',
                 session_id: config.sessionId,
@@ -207,6 +230,28 @@
                 text: text
             };
             ws.send(JSON.stringify(messagePayload));
+
+            // Send to n8n webhook
+            const webhookPayload = {
+                action: 'processMessage',
+                sessionId: config.sessionId,
+                route: 'heygen-knowledge',
+                chatInput: text,
+                metadata: { userId: config.userId, avatarId: config.avatarId }
+            };
+            try {
+                const response = await fetch(config.n8nWebhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(webhookPayload)
+                });
+                if (!response.ok) throw new Error('n8n webhook failed');
+                const data = await response.json();
+                console.log('Webhook response:', data); // Debug: Check if text is received
+            } catch (error) {
+                console.error('Webhook error:', error);
+                responseDiv.textContent += '\nWebhook error: Could not process message.';
+            }
         } else {
             console.error('WebSocket not connected');
             responseDiv.textContent = 'Error: Connection lost. Reconnecting...';
